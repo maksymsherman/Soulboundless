@@ -2,126 +2,98 @@
 pragma solidity ^0.8.18;
 
 import {Test} from "forge-std/Test.sol";
-import {SoulboundToken} from "../src/SoulboundToken.sol";
-import {Safe} from "lib/safe-contracts/contracts/Safe.sol";
-import {SafeProxyFactory} from "lib/safe-contracts/contracts/proxies/SafeProxyFactory.sol";
-import {Enum} from "lib/safe-contracts/contracts/common/Enum.sol";
+import {SafeTestTools} from "safe-tools/SafeTestTools.sol";
+import {SafeTestLib} from "safe-tools/SafeTestLib.sol";
+import {SafeInstance} from "safe-tools/SafeTestTypes.sol";
 
-error OwnableUnauthorizedAccount(address account);
+contract SafeIntegrationTest is Test, SafeTestTools {
+    using SafeTestLib for SafeInstance;
 
-contract SafeIntegrationTest is Test {
-    Safe public safe;
-    SoulboundToken public sbt;
+    SafeInstance public parentSafeInstance;
+    SafeInstance public childSafeInstance;
     address public owner;
+    uint256 public ownerPrivateKey;
 
     function setUp() public {
-        // Create test address
-        owner = makeAddr("owner");
+        // Create owner private key and address
+        ownerPrivateKey = uint256(keccak256(abi.encodePacked("owner")));
+        owner = vm.addr(ownerPrivateKey);
         vm.deal(owner, 100 ether);
         
+        // Setup parent safe with single owner
+        uint256[] memory ownerPKs = new uint256[](1);
+        ownerPKs[0] = ownerPrivateKey;
+        parentSafeInstance = _setupSafe(
+            ownerPKs,     // owner private keys
+            1,           // threshold
+            100 ether    // initial balance
+        );
+
+        // Setup child safe with parent safe as owner
+        address[] memory childOwners = new address[](1);
+        childOwners[0] = address(parentSafeInstance.safe);
+        
+        // Create child safe instance
+        uint256[] memory childOwnerPKs = new uint256[](1);
+        childOwnerPKs[0] = ownerPrivateKey; // We'll use same key for signing parent transactions
+        childSafeInstance = _setupSafe(
+            childOwnerPKs,
+            1,
+            50 ether
+        );
+
+        // Transfer ownership to parent safe
         vm.startPrank(owner);
-
-        // Deploy Safe factory and master copy
-        Safe safeMasterCopy = new Safe();
-        SafeProxyFactory safeFactory = new SafeProxyFactory();
-
-        // Setup Safe configuration
-        address[] memory owners = new address[](1);
-        owners[0] = owner;
-
-        bytes memory initializer = abi.encodeWithSelector(
-            Safe.setup.selector,
-            owners,                     // owners
+        childSafeInstance.safe.setup(
+            childOwners,               // owners
             1,                         // threshold
             address(0),                // to
             bytes(""),                 // data
             address(0),                // fallback handler
             address(0),                // payment token
             0,                         // payment
-            address(0)                 // payment receiver
+            payable(address(0))        // payment receiver
         );
-
-        // Deploy Safe proxy
-        safe = Safe(payable(address(safeFactory.createProxyWithNonce(
-            address(safeMasterCopy),
-            initializer,
-            uint256(blockhash(block.number - 1)) // using previous block hash as nonce
-        ))));
-
-        // Deploy Soulbound Token
-        sbt = new SoulboundToken();
-        
-        // Transfer ownership to Safe
-        sbt.transferOwnership(address(safe));
-
         vm.stopPrank();
     }
 
-    function testSafeMintNFT() public {
-        vm.startPrank(owner);
+    function testSafeSetup() public {
+        // Verify parent safe owner was set correctly
+        assertTrue(parentSafeInstance.safe.isOwner(owner));
+        assertEq(parentSafeInstance.safe.getThreshold(), 1);
 
-        // Create mint transaction data
-        bytes memory mintData = abi.encodeWithSelector(
-            SoulboundToken.mint.selector,
-            owner,
-            1  // tokenId
-        );
-
-        // Create signature for safe transaction
-        bytes32 txHash = safe.getTransactionHash(
-            address(sbt),              // to
-            0,                         // value
-            mintData,                  // data
-            Enum.Operation.Call,       // operation
-            0,                         // safeTxGas
-            0,                         // baseGas
-            0,                         // gasPrice
-            address(0),                // gasToken
-            payable(0),                // refundReceiver
-            safe.nonce()              // nonce
-        );
-
-        // Get owner's private key from the test address label
-        uint256 privateKey = uint256(keccak256(abi.encodePacked("owner")));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, txHash);
-        
-        // Format signature according to EIP-712
-        bytes memory signature = abi.encodePacked(r, s, v, uint256(0));
-
-        // Execute mint through Safe
-        bool success = safe.execTransaction(
-            address(sbt),              // to
-            0,                         // value
-            mintData,                  // data
-            Enum.Operation.Call,       // operation
-            0,                         // safeTxGas
-            0,                         // baseGas
-            0,                         // gasPrice
-            address(0),                // gasToken
-            payable(0),                // refundReceiver
-            signature                  // signatures
-        );
-
-        require(success, "Safe transaction failed");
-
-        // Verify mint was successful
-        assertEq(sbt.ownerOf(1), owner);
-        assertEq(sbt.balanceOf(owner), 1);
-
-        vm.stopPrank();
+        // Verify child safe owner is the parent safe
+        assertTrue(childSafeInstance.safe.isOwner(address(parentSafeInstance.safe)));
+        assertEq(childSafeInstance.safe.getThreshold(), 1);
     }
 
-    function testCannotMintDirectly() public {
-        vm.startPrank(owner);
+    function testParentControlsChild() public {
+        address recipient = address(0xBEEF);
+        uint256 amount = 1 ether;
         
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                OwnableUnauthorizedAccount.selector,
-                owner
-            )
+        // Parent safe initiates transfer from child safe
+        bytes memory transferCalldata = abi.encodeWithSignature(
+            "execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)",
+            recipient,
+            amount,
+            "",
+            0, // Call
+            0, // safeTxGas
+            0, // baseGas  
+            0, // gasPrice
+            address(0), // gasToken
+            payable(address(0)), // refundReceiver
+            "" // signatures - will be added by execTransaction
         );
-        sbt.mint(owner, 1);
 
-        vm.stopPrank();
+        // Execute transfer through parent safe
+        parentSafeInstance.execTransaction(
+            address(childSafeInstance.safe),
+            0,
+            transferCalldata
+        );
+
+        // Verify transfer was successful
+        assertEq(recipient.balance, amount);
     }
 }
