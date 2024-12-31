@@ -3,8 +3,9 @@ pragma solidity ^0.8.18;
 
 import {Script, console} from "forge-std/Script.sol";
 import {SoulboundToken} from "../src/SoulboundToken.sol";
-import {Safe} from "@safe-global/safe-contracts/contracts/Safe.sol";
-import {SafeProxyFactory} from "@safe-global/safe-contracts/contracts/proxies/SafeProxyFactory.sol";
+import {Safe} from "lib/safe-contracts/contracts/Safe.sol";
+import {SafeProxyFactory} from "lib/safe-contracts/contracts/proxies/SafeProxyFactory.sol";
+import {Enum} from "lib/safe-contracts/contracts/common/Enum.sol";
 
 contract DeployToken is Script {
     function run() external {
@@ -32,10 +33,11 @@ contract DeployToken is Script {
             address(0)                 // payment receiver
         );
 
-        // Deploy Safe proxy
-        Safe safe = Safe(payable(address(safeFactory.createProxy(
+        // Deploy Safe proxy with nonce
+        Safe safe = Safe(payable(address(safeFactory.createProxyWithNonce(
             address(safeMasterCopy),
-            initializer
+            initializer,
+            uint256(blockhash(block.number - 1)) // using previous block hash as nonce
         ))));
 
         // Deploy Soulbound Token

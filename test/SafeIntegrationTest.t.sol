@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.18;
 
-import "forge-std/Test.sol";
-import "../src/SoulboundToken.sol";
-import "@safe-global/safe-contracts/contracts/Safe.sol";
-import "@safe-global/safe-contracts/contracts/proxies/SafeProxyFactory.sol";
+import {Test} from "forge-std/Test.sol";
+import {SoulboundToken} from "../src/SoulboundToken.sol";
+import {Safe} from "lib/safe-contracts/contracts/Safe.sol";
+import {SafeProxyFactory} from "lib/safe-contracts/contracts/proxies/SafeProxyFactory.sol";
+import {Enum} from "lib/safe-contracts/contracts/common/Enum.sol";
+
+error OwnableUnauthorizedAccount(address account);
 
 contract SafeIntegrationTest is Test {
     Safe public safe;
@@ -39,9 +42,10 @@ contract SafeIntegrationTest is Test {
         );
 
         // Deploy Safe proxy
-        safe = Safe(payable(address(safeFactory.createProxy(
+        safe = Safe(payable(address(safeFactory.createProxyWithNonce(
             address(safeMasterCopy),
-            initializer
+            initializer,
+            uint256(blockhash(block.number - 1)) // using previous block hash as nonce
         ))));
 
         // Deploy Soulbound Token
@@ -63,8 +67,8 @@ contract SafeIntegrationTest is Test {
             1  // tokenId
         );
 
-        // Execute mint through Safe
-        safe.execTransaction(
+        // Create signature for safe transaction
+        bytes32 txHash = safe.getTransactionHash(
             address(sbt),              // to
             0,                         // value
             mintData,                  // data
@@ -74,12 +78,31 @@ contract SafeIntegrationTest is Test {
             0,                         // gasPrice
             address(0),                // gasToken
             payable(0),                // refundReceiver
-            abi.encodePacked(          // signatures
-                uint256(0),
-                uint256(0),
-                uint8(0)
-            )
+            safe.nonce()              // nonce
         );
+
+        // Get owner's private key from the test address label
+        uint256 privateKey = uint256(keccak256(abi.encodePacked("owner")));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, txHash);
+        
+        // Format signature according to EIP-712
+        bytes memory signature = abi.encodePacked(r, s, v, uint256(0));
+
+        // Execute mint through Safe
+        bool success = safe.execTransaction(
+            address(sbt),              // to
+            0,                         // value
+            mintData,                  // data
+            Enum.Operation.Call,       // operation
+            0,                         // safeTxGas
+            0,                         // baseGas
+            0,                         // gasPrice
+            address(0),                // gasToken
+            payable(0),                // refundReceiver
+            signature                  // signatures
+        );
+
+        require(success, "Safe transaction failed");
 
         // Verify mint was successful
         assertEq(sbt.ownerOf(1), owner);
