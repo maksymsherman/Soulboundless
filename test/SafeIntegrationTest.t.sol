@@ -7,53 +7,45 @@ import {SafeProxyFactory} from "lib/safe-contracts/contracts/proxies/SafeProxyFa
 import {SafeTestTools, SafeInstance} from "safe-tools/SafeTestTools.sol";
 import {Enum} from "lib/safe-contracts/contracts/common/Enum.sol";
 
-contract SafeIntegrationTest is Test {
-    Safe public parentSafe;
-    Safe public childSafe;
-    address public owner;
+contract SafeIntegrationTest is Test, SafeTestTools {
+    using SafeTestLib for SafeInstance;
+    
+    SafeInstance public parentSafe;
+    SafeInstance public childSafe;
     uint256 public ownerPrivateKey;
 
     function setUp() public {
-        // Create test address with private key
+        // Create owner key
         ownerPrivateKey = uint256(keccak256(abi.encodePacked("owner")));
-        owner = vm.addr(ownerPrivateKey);
-        vm.deal(owner, 100 ether);
+        vm.label(vm.addr(ownerPrivateKey), "Owner");
+
+        // Setup parent safe with single owner
+        uint256[] memory parentPKs = new uint256[](1);
+        parentPKs[0] = ownerPrivateKey;
         
-        vm.startPrank(owner);
-
-        // Deploy Safe factory and master copy
-        Safe safeMasterCopy = new Safe();
-        SafeProxyFactory safeFactory = new SafeProxyFactory();
-
-        // Setup Parent Safe configuration
-        address[] memory owners = new address[](1);
-        owners[0] = owner;
-
-        bytes memory parentInitializer = abi.encodeWithSelector(
-            Safe.setup.selector,
-            owners,                     // owners
-            1,                         // threshold
-            address(0),                // to
-            bytes(""),                 // data
-            address(0),                // fallback handler
-            address(0),                // payment token
-            0,                         // payment
-            address(0)                 // payment receiver
+        parentSafe = _setupSafe(
+            parentPKs,    // owner private keys
+            1,           // threshold
+            100 ether    // initial balance
         );
 
-        // Deploy Parent Safe proxy
-        parentSafe = Safe(payable(address(safeFactory.createProxyWithNonce(
-            address(safeMasterCopy),
-            parentInitializer,
-            uint256(keccak256(abi.encodePacked("parent"))) // nonce
-        ))));
-
-        // Setup Child Safe with Parent Safe as owner
+        // Setup child safe with parent safe as owner
         address[] memory childOwners = new address[](1);
-        childOwners[0] = address(parentSafe);
+        childOwners[0] = address(parentSafe.safe);
 
-        bytes memory childInitializer = abi.encodeWithSelector(
-            Safe.setup.selector,
+        // Create child safe with same signing key
+        uint256[] memory childPKs = new uint256[](1);
+        childPKs[0] = ownerPrivateKey;
+
+        childSafe = _setupSafe(
+            childPKs,
+            1,
+            50 ether
+        );
+
+        // Transfer ownership to parent safe
+        vm.startPrank(vm.addr(ownerPrivateKey));
+        childSafe.safe.setup(
             childOwners,               // owners
             1,                         // threshold
             address(0),                // to
@@ -61,27 +53,84 @@ contract SafeIntegrationTest is Test {
             address(0),                // fallback handler
             address(0),                // payment token
             0,                         // payment
-            address(0)                 // payment receiver
+            payable(address(0))        // payment receiver
         );
-
-        // Deploy Child Safe proxy
-        childSafe = Safe(payable(address(safeFactory.createProxyWithNonce(
-            address(safeMasterCopy),
-            childInitializer,
-            uint256(keccak256(abi.encodePacked("child"))) // nonce
-        ))));
-
         vm.stopPrank();
     }
 
     function testSafeSetup() public {
         // Verify parent safe owner was set correctly
-        assertTrue(parentSafe.isOwner(owner));
-        assertEq(parentSafe.getThreshold(), 1);
+        assertTrue(parentSafe.safe.isOwner(vm.addr(ownerPrivateKey)));
+        assertEq(parentSafe.safe.getThreshold(), 1);
 
         // Verify child safe owner is the parent safe
-        assertTrue(childSafe.isOwner(address(parentSafe)));
-        assertEq(childSafe.getThreshold(), 1);
+        assertTrue(childSafe.safe.isOwner(address(parentSafe.safe)));
+        assertEq(childSafe.safe.getThreshold(), 1);
+    }
+
+    function testParentControlsChild() public {
+        address recipient = address(0xBEEF);
+        uint256 amount = 1 ether;
+
+        // Parent safe initiates transfer from child safe
+        bytes memory transferCalldata = abi.encodeWithSelector(
+            Safe.execTransaction.selector,
+            recipient,
+            amount,
+            "",             // data
+            Enum.Operation.Call,
+            0,              // safeTxGas
+            0,              // baseGas
+            0,              // gasPrice
+            address(0),     // gasToken
+            payable(address(0)), // refundReceiver
+            ""             // signatures - will be added by execTransaction
+        );
+
+        // Execute transfer through parent safe using SafeTestLib helper
+        parentSafe.execTransaction(
+            address(childSafe.safe),
+            0,
+            transferCalldata
+        );
+
+        // Verify transfer was successful
+        assertEq(recipient.balance, amount);
+    }
+
+    function testModuleManagement() public {
+        address mockModule = address(0xDEAD);
+        
+        // Enable module through parent safe
+        bytes memory enableModuleData = abi.encodeWithSelector(
+            ModuleManager.enableModule.selector,
+            mockModule
+        );
+
+        parentSafe.execTransaction(
+            address(childSafe.safe),
+            0,
+            enableModuleData
+        );
+
+        // Verify module was enabled
+        assertTrue(childSafe.safe.isModuleEnabled(mockModule));
+
+        // Disable module
+        bytes memory disableModuleData = abi.encodeWithSelector(
+            ModuleManager.disableModule.selector,
+            address(SENTINEL_MODULES),  // prev module
+            mockModule
+        );
+
+        parentSafe.execTransaction(
+            address(childSafe.safe),
+            0,
+            disableModuleData
+        );
+
+        // Verify module was disabled
+        assertFalse(childSafe.safe.isModuleEnabled(mockModule));
     }
 
     function testTransferOwnership() public {
