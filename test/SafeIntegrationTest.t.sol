@@ -4,6 +4,8 @@ pragma solidity ^0.8.18;
 import {Test} from "forge-std/Test.sol";
 import {Safe} from "lib/safe-contracts/contracts/Safe.sol";
 import {SafeProxyFactory} from "lib/safe-contracts/contracts/proxies/SafeProxyFactory.sol";
+import {SafeTestTools, SafeInstance} from "safe-tools/SafeTestTools.sol";
+import {Enum} from "lib/safe-contracts/contracts/common/Enum.sol";
 
 contract SafeIntegrationTest is Test {
     Safe public parentSafe;
@@ -80,5 +82,52 @@ contract SafeIntegrationTest is Test {
         // Verify child safe owner is the parent safe
         assertTrue(childSafe.isOwner(address(parentSafe)));
         assertEq(childSafe.getThreshold(), 1);
+    }
+
+    function testTransferOwnership() public {
+        // First attach to the existing parent safe
+        SafeTestTools safeTools = new SafeTestTools();
+        SafeInstance memory parentSafeInstance = safeTools._attachToSafe(address(parentSafe));
+        
+        // Create new owner address
+        address newOwner = makeAddr("newOwner");
+        
+        // 1. First add the new owner
+        bytes memory addOwnerData = abi.encodeWithSelector(
+            Safe.addOwnerWithThreshold.selector,
+            newOwner,
+            1  // keep same threshold
+        );
+        
+        // Execute transaction to add new owner
+        safeTools.execTransaction(
+            parentSafeInstance,
+            address(parentSafe),
+            0,
+            addOwnerData,
+            Enum.Operation.Call
+        );
+        
+        // 2. Then remove the old owner
+        bytes memory removeOwnerData = abi.encodeWithSelector(
+            Safe.removeOwner.selector,
+            address(0), // prevOwner - will be automatically handled since we have one owner
+            owner,      // owner to remove
+            1          // new threshold
+        );
+        
+        // Execute transaction to remove old owner
+        safeTools.execTransaction(
+            parentSafeInstance,
+            address(parentSafe),
+            0,
+            removeOwnerData,
+            Enum.Operation.Call
+        );
+        
+        // Verify ownership transfer
+        assertTrue(parentSafe.isOwner(newOwner));
+        assertFalse(parentSafe.isOwner(owner));
+        assertEq(parentSafe.getThreshold(), 1);
     }
 }
