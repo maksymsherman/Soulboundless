@@ -1,6 +1,6 @@
 <h1>Soulbound(less) Token</h1>
 
-<p> Showcases an example of a a soulbounless token's ownership getting transferred between two multisig accounts.</p>
+<p> Showcases an example of a a soulbound token's ownership getting transferred between two multisigs.</p>
 
 <p> This project is built using Foundry.</p>
 
