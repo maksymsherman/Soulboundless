@@ -11,7 +11,7 @@ out/
 docs/
 
 # Archive
-/src/Archive
+**/Archive/
 
 # Dotenv file
 .env

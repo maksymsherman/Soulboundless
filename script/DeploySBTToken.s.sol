@@ -9,15 +9,18 @@ import {Enum} from "lib/safe-contracts/contracts/common/Enum.sol";
 
 contract DeployToken is Script {
     function run() external {
-        address owner = msg.sender;
+        uint256 owner1PrivateKey = uint256(keccak256(abi.encodePacked("owner1")));
+        address owner = vm.addr(owner1PrivateKey);
         
         vm.startBroadcast();
 
-        // Deploy Safe factory and master copy
+        // Deploy Safe master copy
         Safe safeMasterCopy = new Safe();
+        
+        // Deploy factory
         SafeProxyFactory safeFactory = new SafeProxyFactory();
 
-        // Setup Safe configuration
+        // Setup owners array
         address[] memory owners = new address[](1);
         owners[0] = owner;
 
@@ -27,7 +30,7 @@ contract DeployToken is Script {
             1,                         // threshold
             address(0),                // to
             bytes(""),                 // data
-            address(0),                // fallback handler
+            address(0x1),             // fallbackHandler
             address(0),                // payment token
             0,                         // payment
             address(0)                 // payment receiver
@@ -37,7 +40,7 @@ contract DeployToken is Script {
         Safe safe = Safe(payable(address(safeFactory.createProxyWithNonce(
             address(safeMasterCopy),
             initializer,
-            uint256(blockhash(block.number - 1)) // using previous block hash as nonce
+            uint256(keccak256(abi.encodePacked("salt"))) // match test nonce
         ))));
 
         // Deploy Soulbound Token

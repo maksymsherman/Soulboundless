@@ -1,3 +1,9 @@
+<h1>Soulbound(less) Token</h1>
+
+<p> This project is built using Foundry.</p>
+
+<p> This project is built using Foundry.</p>
+
 ## Foundry
 
 **Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
@@ -45,22 +51,5 @@ $ forge snapshot
 $ anvil
 ```
 
-### Deploy
 
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
 
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
