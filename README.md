@@ -26,7 +26,7 @@ $ forge test
 $ anvil
 ```
 
-<p>Open new terminal window</p>
+<p>Open new terminal window.</p>
 
 ### Deploy
 
