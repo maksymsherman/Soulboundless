@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity ^0.8.18;
 
 import {Test} from "forge-std/Test.sol";
 import {Safe} from "lib/safe-contracts/contracts/Safe.sol";
 import {SafeProxyFactory} from "lib/safe-contracts/contracts/proxies/SafeProxyFactory.sol";
 import {Enum} from "lib/safe-contracts/contracts/common/Enum.sol";
+import {SoulboundToken} from "../src/SoulboundToken.sol";
+import "forge-std/console.sol";
 
 contract SafeIntegrationTest is Test {
     Safe public parentSafe;
@@ -14,7 +16,6 @@ contract SafeIntegrationTest is Test {
     uint256 public owner2PrivateKey;
 
     function setUp() public {
-        // Create two test addresses with private keys
         owner1PrivateKey = uint256(keccak256(abi.encodePacked("owner1")));
         owner2PrivateKey = uint256(keccak256(abi.encodePacked("owner2")));
         owner1 = vm.addr(owner1PrivateKey);
@@ -24,33 +25,41 @@ contract SafeIntegrationTest is Test {
         
         vm.startPrank(owner1);
 
-        // Deploy Safe factory and master copy
+        // Deploy Safe master copy
         Safe safeMasterCopy = new Safe();
+        
+        // Deploy factory
         SafeProxyFactory safeFactory = new SafeProxyFactory();
 
-        // Setup Safe configuration with owner1 as the sole owner
+        // Setup owners array
         address[] memory owners = new address[](1);
         owners[0] = owner1;
 
+        // Create initializer data
         bytes memory initializer = abi.encodeWithSelector(
             Safe.setup.selector,
             owners,                     // owners
             1,                         // threshold
             address(0),                // to
             bytes(""),                 // data
-            address(0),                // fallback handler
+            address(0x1),             // fallbackHandler
             address(0),                // payment token
             0,                         // payment
             address(0)                 // payment receiver
         );
 
-        // Deploy Safe proxy
-        parentSafe = Safe(payable(address(safeFactory.createProxyWithNonce(
-            address(safeMasterCopy),
-            initializer,
-            uint256(keccak256(abi.encodePacked("safe"))) // nonce
-        ))));
+        // Deploy proxy pointing to the master copy
+        parentSafe = Safe(payable(
+            address(safeFactory.createProxyWithNonce(
+                address(safeMasterCopy),
+                initializer,
+                uint256(keccak256(abi.encodePacked("salt")))
+            ))
+        ));
 
+        // Store the reference to the deployed Safe
+        assertTrue(address(parentSafe) != address(0), "Safe deployment failed");
+        
         vm.stopPrank();
     }
 
@@ -74,6 +83,9 @@ contract SafeIntegrationTest is Test {
             address(0),
             parentSafe.nonce()
         );
+
+        assertTrue(parentSafe.isOwner(owner1), "owner1 should be initial owner");
+        assertEq(parentSafe.getThreshold(), 1, "Initial threshold should be 1");
 
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(owner1PrivateKey, txHash);
         bytes memory signature = abi.encodePacked(r, s, v);
@@ -132,13 +144,6 @@ contract SafeIntegrationTest is Test {
         // Verify ownership change
         assertFalse(parentSafe.isOwner(owner1));
         assertTrue(parentSafe.isOwner(owner2));
-        assertEq(parentSafe.getThreshold(), 1);
-    }
-
-    function testSafeSetup() public {
-        // Verify safe owner was set correctly
-        assertTrue(parentSafe.isOwner(owner1));
-        assertFalse(parentSafe.isOwner(owner2));
         assertEq(parentSafe.getThreshold(), 1);
     }
 }
